@@ -66,6 +66,14 @@
   </div>
 
   <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <b style="font-size:14px">등록된 사내 PC</b>
+      <span class="muted" id="devcount" style="font-size:13px;color:#6b7280"></span>
+    </div>
+    <table><tbody id="devrows"></tbody></table>
+  </div>
+
+  <div class="panel">
     <table>
       <thead><tr><th>대상</th><th>내용</th><th>상태</th><th>접속 정보</th><th></th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" style="color:#9ca3af">불러오는 중...</td></tr></tbody>
@@ -111,6 +119,7 @@
 
   // RustDesk 클라이언트를 해당 ID로 바로 띄운다.
   function connect(id, pw) {
+    // 관리 기기는 수락 방식이라 비밀번호가 없다. 폴백 세션에서만 복사한다.
     if (pw) navigator.clipboard?.writeText(pw).then(
       () => flash('비밀번호를 클립보드에 복사했습니다', true), () => {});
     location.href = 'rustdesk://connection/new/' + id;
@@ -125,20 +134,37 @@
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:#9ca3af">아직 세션이 없습니다</td></tr>'; return; }
 
     tbody.innerHTML = list.map(s => {
-      const info = s.status === 'ready'
-        ? '<code>' + s.rustdeskId + '</code> / <code>' + (s.connectPassword || '') + '</code>'
+      const info = s.rustdeskId
+        ? '<code>' + s.rustdeskId + '</code>' +
+          (s.connectPassword ? ' / <code>' + s.connectPassword + '</code>' : '')
         : '<span style="color:#9ca3af">대기 중</span>';
+      const who = s.email + (s.deviceHostname
+        ? '<br><span style="font-size:12px;color:#6b7280">🖥 ' + s.deviceHostname + '</span>'
+        : '<br><span style="font-size:12px;color:#b45309">미등록 기기</span>');
       const action = s.status === 'ready'
         ? '<button class="ghost" onclick="connect(\'' + s.rustdeskId + '\',\'' + (s.connectPassword||'') + '\')">연결</button> ' +
           '<button class="ghost" onclick="endSession(\'' + s.id + '\')">종료</button>'
         : (['ended','expired'].includes(s.status) ? '' :
            '<button class="ghost" onclick="endSession(\'' + s.id + '\')">취소</button>');
-      return '<tr><td>' + s.email + '</td><td>' + (s.note || '-') + '</td>' +
+      return '<tr><td>' + who + '</td><td>' + (s.note || '-') + '</td>' +
              '<td><span class="badge b-' + s.status + '">' + (LABEL[s.status]||s.status) + '</span></td>' +
              '<td>' + info + '</td><td>' + action + '</td></tr>';
     }).join('');
   }
 
-  refresh();
+  async function refreshDevices() {
+    if (!token) return;
+    const res = await api('/api/devices');
+    if (!res.ok) return;
+    const list = await res.json();
+    document.getElementById('devcount').textContent = list.length + '대';
+    document.getElementById('devrows').innerHTML = list.length
+      ? list.map(d => '<tr><td><b>' + d.hostname + '</b></td><td>' + (d.upn || '-') +
+          '</td><td><code>' + d.rustdeskId + '</code></td></tr>').join('')
+      : '<tr><td style="color:#9ca3af">아직 등록된 기기가 없습니다 (Intune 배포 후 자동 등록)</td></tr>';
+  }
+
+  refresh(); refreshDevices();
   setInterval(refresh, 3000);
+  setInterval(refreshDevices, 30000);
 </script></body></html>

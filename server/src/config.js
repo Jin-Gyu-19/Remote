@@ -10,6 +10,9 @@ export const config = {
   // 지원자(운영자) 대시보드 접근 토큰. 원격 접속 도구이므로 반드시 설정할 것.
   adminToken: env.ADMIN_TOKEN || 'dev-admin-token',
 
+  // Intune 등록 스크립트가 사용하는 공유 비밀값.
+  enrollSecret: env.ENROLL_SECRET || 'dev-enroll-secret',
+
   // 세션 링크 유효 시간(분)
   sessionTtlMinutes: Number(env.SESSION_TTL_MINUTES || 15),
 

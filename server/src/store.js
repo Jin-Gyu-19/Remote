@@ -33,7 +33,7 @@ function newToken() {
   return randomBytes(32).toString('base64url');
 }
 
-export function createSession({ email, note = '', createdBy = 'admin' }) {
+export function createSession({ email, note = '', createdBy = 'admin', device = null }) {
   const now = Date.now();
   const session = {
     id: randomUUID(),
@@ -42,8 +42,11 @@ export function createSession({ email, note = '', createdBy = 'admin' }) {
     note,
     createdBy,
     status: 'created',
-    // 피지원자 측이 보고하는 접속 정보
-    rustdeskId: null,
+    // Intune 관리 기기는 접속 대상이 이미 정해져 있어 피지원자가 입력할 것이 없다.
+    managed: Boolean(device),
+    deviceHostname: device?.hostname || null,
+    rustdeskId: device?.rustdeskId || null,
+    // 미등록 기기(외부 지원)에서만 사용하는 폴백 입력값
     connectPassword: null,
     createdAt: now,
     expiresAt: now + config.sessionTtlMinutes * 60_000,

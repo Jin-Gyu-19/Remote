@@ -2,6 +2,7 @@ import express from 'express';
 import { join } from 'node:path';
 import { config } from './config.js';
 import * as store from './store.js';
+import * as devices from './devices.js';
 import { sendSessionLink, mailerMode } from './mailer.js';
 import { renderLanding } from './landing.js';
 
@@ -26,7 +27,9 @@ app.post('/api/sessions', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: '올바른 이메일이 필요합니다' });
   }
 
-  const session = store.createSession({ email, note: note || '' });
+  // 등록된 사내 PC 라면 접속 대상이 이미 정해져 있어 피지원자가 입력할 것이 없다.
+  const device = devices.findByUpn(email);
+  const session = store.createSession({ email, note: note || '', device });
   const link = `${config.baseUrl}/s/${session.token}`;
 
   try {
@@ -71,10 +74,15 @@ app.get('/s/:token', (req, res) => {
 app.post('/api/s/:token/accept', (req, res) => {
   const session = store.getByToken(req.params.token);
   if (!session || !store.isUsable(session)) return res.status(410).json({ error: '만료된 링크입니다' });
+  const now = Date.now();
   if (session.status === 'created') {
-    store.update(session, { status: 'opened', openedAt: Date.now() });
+    store.update(session, { status: 'opened', openedAt: now });
   }
-  res.json({ ok: true, status: session.status });
+  // 관리 기기는 접속 정보를 이미 알고 있으므로 동의 즉시 연결 가능 상태가 된다.
+  if (session.managed && session.status === 'opened') {
+    store.update(session, { status: 'ready', readyAt: now });
+  }
+  res.json({ ok: true, status: session.status, managed: session.managed });
 });
 
 // 피지원자 측 접속 정보 보고.
@@ -86,14 +94,37 @@ app.post('/api/s/:token/ready', (req, res) => {
   const rustdeskId = String(req.body?.rustdeskId || '').replace(/\s/g, '');
   const password = String(req.body?.password || '').trim();
   if (!/^\d{6,16}$/.test(rustdeskId)) return res.status(400).json({ error: 'ID 형식이 올바르지 않습니다' });
-  if (password.length < 4) return res.status(400).json({ error: '비밀번호가 너무 짧습니다' });
 
   store.update(session, {
     status: 'ready',
     readyAt: Date.now(),
     rustdeskId,
-    connectPassword: password,
+    connectPassword: password || null,
   });
+  res.json({ ok: true });
+});
+
+// ---------- 기기 등록 (Intune 배포 스크립트가 호출) ----------
+
+app.post('/api/devices/enroll', (req, res) => {
+  if (!devices.verifyEnrollSecret(req.get('x-enroll-secret'))) {
+    return res.status(401).json({ error: '등록 인증에 실패했습니다' });
+  }
+  const { hostname, upn, rustdeskId } = req.body || {};
+  if (!hostname || !/^\d{6,16}$/.test(String(rustdeskId || ''))) {
+    return res.status(400).json({ error: 'hostname 과 rustdeskId 가 필요합니다' });
+  }
+  const device = devices.enroll({ hostname, upn, rustdeskId });
+  console.log(`기기 등록: ${device.hostname} (${device.upn || 'UPN 없음'}) -> ${device.rustdeskId}`);
+  res.status(201).json(device);
+});
+
+app.get('/api/devices', requireAdmin, (_req, res) => res.json(devices.list()));
+
+app.delete('/api/devices/:hostname', requireAdmin, (req, res) => {
+  if (!devices.remove(req.params.hostname)) {
+    return res.status(404).json({ error: '등록되지 않은 기기입니다' });
+  }
   res.json({ ok: true });
 });
 

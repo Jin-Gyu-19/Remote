@@ -55,7 +55,7 @@ export function renderLanding({ state, session, token }) {
     ? `<div class="note">요청 내용: <b>${escapeHtml(session.note)}</b></div>`
     : '';
 
-  return SHELL('원격지원 연결', `
+  const consent = `
     <div id="step-consent" class="step on">
       <h1>원격지원을 시작할까요?</h1>
       ${note}
@@ -63,7 +63,32 @@ export function renderLanding({ state, session, token }) {
          연결 중에는 화면에 표시되며, 언제든 직접 종료할 수 있습니다.</p>
       <button class="btn" id="accept">동의하고 연결 시작</button>
       <p class="muted" style="margin-top:14px">본인이 요청하지 않은 지원이라면 이 창을 닫으세요.</p>
-    </div>
+    </div>`;
+
+  // 회사에서 관리하는 PC: 지원 프로그램이 이미 상주하므로 동의만 하면 된다.
+  if (session.managed) {
+    return SHELL('원격지원 연결', `
+      ${consent}
+      <div id="step-done" class="step ok">
+        <div class="mark">✅</div>
+        <h1>담당자에게 전달되었습니다</h1>
+        <p>잠시 후 화면에 <b>연결 수락</b> 창이 나타납니다.<br>
+           <b>수락</b>을 눌러주시면 연결이 시작됩니다.</p>
+        <p class="muted">이 창은 닫으셔도 됩니다.</p>
+      </div>
+      <script>
+        const token = ${JSON.stringify(token)};
+        document.getElementById('accept').addEventListener('click', async () => {
+          await fetch('/api/s/' + token + '/accept', { method: 'POST' });
+          document.getElementById('step-consent').classList.remove('on');
+          document.getElementById('step-done').classList.add('on');
+        });
+      </script>`);
+  }
+
+  // 미등록 기기(외부 지원): 프로그램을 실행하고 화면의 ID를 알려주어야 한다.
+  return SHELL('원격지원 연결', `
+    ${consent}
 
     <div id="step-connect" class="step">
       <h1>지원 프로그램을 실행해 주세요</h1>
@@ -71,11 +96,11 @@ export function renderLanding({ state, session, token }) {
       <a class="btn" id="deeplink" href="#">지원 프로그램 열기</a>
 
       <p class="muted" style="margin-top:20px">프로그램이 열리면 화면에 표시된
-         <b>ID</b>와 <b>비밀번호</b>를 아래에 입력해 주세요.</p>
+         <b>ID</b>를 아래에 입력해 주세요.</p>
       <label for="rid">ID (숫자)</label>
       <input id="rid" inputmode="numeric" autocomplete="off" placeholder="예: 123456789">
-      <label for="pw">비밀번호</label>
-      <input id="pw" autocomplete="off" placeholder="화면에 표시된 비밀번호">
+      <label for="pw">비밀번호 <span style="font-weight:normal;color:#6b7280">(표시된 경우에만)</span></label>
+      <input id="pw" autocomplete="off" placeholder="비밀번호가 보이지 않으면 비워두세요">
       <div class="err" id="err"></div>
       <button class="btn" id="submit" style="margin-top:16px">담당자에게 전달</button>
     </div>
@@ -96,7 +121,6 @@ export function renderLanding({ state, session, token }) {
 
       document.getElementById('accept').addEventListener('click', async () => {
         await fetch('/api/s/' + token + '/accept', { method: 'POST' });
-        // 설치된 클라이언트가 있으면 커스텀 스킴으로 바로 열린다.
         const scheme = 'rustdesk://';
         document.getElementById('deeplink').href = scheme;
         location.href = scheme;
