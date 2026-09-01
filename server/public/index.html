@@ -24,6 +24,7 @@
   th { font-size:12px; color:#6b7280; text-transform:uppercase; }
   .badge { display:inline-block; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:bold; }
   .b-created { background:#e0e7ff; color:#3730a3; }
+  .b-authed  { background:#e0f2fe; color:#075985; }
   .b-opened  { background:#fef3c7; color:#92400e; }
   .b-ready   { background:#d1fae5; color:#065f46; }
   .b-ended, .b-expired { background:#e5e7eb; color:#6b7280; }
@@ -73,14 +74,6 @@
   </div>
 
   <div class="panel">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <b style="font-size:14px">등록된 사내 PC</b>
-      <span class="muted" id="devcount" style="font-size:13px;color:#6b7280"></span>
-    </div>
-    <table><tbody id="devrows"></tbody></table>
-  </div>
-
-  <div class="panel">
     <table>
       <thead><tr><th>대상</th><th>내용</th><th>상태</th><th>접속 정보</th><th></th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" style="color:#9ca3af">불러오는 중...</td></tr></tbody>
@@ -89,7 +82,7 @@
 </div>
 
 <script>
-  const LABEL = { created:'발송됨', opened:'열람함', ready:'연결 준비', ended:'종료', expired:'만료' };
+  const LABEL = { created:'발송됨', authed:'본인확인됨', opened:'동의함', ready:'연결 준비', ended:'종료', expired:'만료' };
   let token = localStorage.getItem('adminToken') || '';
   document.getElementById('admin').value = token;
 
@@ -104,7 +97,7 @@
     token = document.getElementById('admin').value.trim();
     localStorage.setItem('adminToken', token);
     collapseAuth(Boolean(token));
-    flash('토큰을 저장했습니다', true); refresh(); refreshDevices();
+    flash('토큰을 저장했습니다', true); refresh();
   }
   function flash(text, ok) {
     const m = document.getElementById('msg');
@@ -155,14 +148,27 @@
     tbody.innerHTML = list.map(s => {
       // 상대가 동의하기 전에는 접속 정보를 띄우지 않는다.
       // 관리 기기는 발송 시점에 이미 ID를 알지만, 아직 연결할 수 있는 상태가 아니다.
+      const WAIT = { created:'본인확인 대기', authed:'동의 대기 중', opened:'프로그램 확인 중' };
       const info = s.status === 'ready'
         ? '<code>' + s.rustdeskId + '</code>' +
-          (s.connectPassword ? ' / <code>' + s.connectPassword + '</code>' : '')
-        : '<span style="color:#9ca3af">' +
-          (s.status === 'created' ? '동의 대기 중' : '대기 중') + '</span>';
-      const who = s.email + (s.deviceHostname
-        ? '<br><span style="font-size:12px;color:#6b7280">🖥 ' + s.deviceHostname + '</span>'
-        : '<br><span style="font-size:12px;color:#b45309">미등록 기기</span>');
+          (s.connectPassword ? ' / <code>' + s.connectPassword + '</code>' : '') +
+          (s.reportedBy === 'manual' ? ' <span style="font-size:11px;color:#b45309">직접 입력</span>' : '')
+        : '<span style="color:#9ca3af">' + (WAIT[s.status] || '대기 중') + '</span>';
+      // 로그인했더라도 초대 대상과 다른 계정이면 확인된 것이 아니다.
+      let sub, subColor;
+      if (s.authMatched) {
+        sub = '✓ 본인확인' + (s.isGuest ? ' (게스트)' : '') +
+          (s.deviceHostname ? ' · 🖥 ' + s.deviceHostname : '');
+        subColor = '#6b7280';
+      } else if (s.authedUpn) {
+        sub = '⚠ 다른 계정으로 로그인: ' + s.authedUpn;
+        subColor = '#b91c1c';
+      } else {
+        sub = '본인확인 대기';
+        subColor = '#b45309';
+      }
+      const who = s.email + '<br><span style="font-size:12px;color:' + subColor + '">' +
+        sub + '</span>';
       const action = s.status === 'ready'
         ? '<button class="ghost" onclick="connect(\'' + s.rustdeskId + '\',\'' + (s.connectPassword||'') + '\')">연결</button> ' +
           '<button class="ghost" onclick="endSession(\'' + s.id + '\')">종료</button>'
@@ -174,20 +180,7 @@
     }).join('');
   }
 
-  async function refreshDevices() {
-    if (!token) return;
-    const res = await api('/api/devices');
-    if (!res.ok) return;
-    const list = await res.json();
-    document.getElementById('devcount').textContent = list.length + '대';
-    document.getElementById('devrows').innerHTML = list.length
-      ? list.map(d => '<tr><td><b>' + d.hostname + '</b></td><td>' + (d.upn || '-') +
-          '</td><td><code>' + d.rustdeskId + '</code></td></tr>').join('')
-      : '<tr><td style="color:#9ca3af">아직 등록된 기기가 없습니다 (Intune 배포 후 자동 등록)</td></tr>';
-  }
-
   collapseAuth(Boolean(token));
-  refresh(); refreshDevices();
+  refresh();
   setInterval(refresh, 3000);
-  setInterval(refreshDevices, 30000);
 </script></body></html>

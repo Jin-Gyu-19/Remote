@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@azure/msal-node": "^6.0.0",
     "express": "^5.2.1",
     "nodemailer": "^9.1.0"
   }

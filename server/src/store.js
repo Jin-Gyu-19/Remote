@@ -33,7 +33,7 @@ function newToken() {
   return randomBytes(32).toString('base64url');
 }
 
-export function createSession({ email, note = '', createdBy = 'admin', device = null }) {
+export function createSession({ email, note = '', createdBy = 'admin' }) {
   const now = Date.now();
   const session = {
     id: randomUUID(),
@@ -42,11 +42,18 @@ export function createSession({ email, note = '', createdBy = 'admin', device = 
     note,
     createdBy,
     status: 'created',
-    // Intune 관리 기기는 접속 대상이 이미 정해져 있어 피지원자가 입력할 것이 없다.
-    managed: Boolean(device),
-    deviceHostname: device?.hostname || null,
-    rustdeskId: device?.rustdeskId || null,
-    // 미등록 기기(외부 지원)에서만 사용하는 폴백 입력값
+    // 회사 계정 로그인으로 확인한 신원. 확인 전에는 연결 단계로 넘어갈 수 없다.
+    authedUpn: null,
+    authedName: null,
+    // 로그인은 했지만 초대 대상과 다른 계정일 수 있다. 둘을 구분해서 기록한다.
+    authMatched: false,
+    isGuest: false,
+    authAt: null,
+    // 접속 대상은 인증된 사용자가 링크를 연 그 PC 다.
+    // 상주 핸들러가 보고하거나(agent), 핸들러가 없으면 직접 입력한다(manual).
+    rustdeskId: null,
+    deviceHostname: null,
+    reportedBy: null,
     connectPassword: null,
     createdAt: now,
     expiresAt: now + config.sessionTtlMinutes * 60_000,

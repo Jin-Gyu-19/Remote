@@ -2,22 +2,34 @@ import express from 'express';
 import { join } from 'node:path';
 import { config } from './config.js';
 import * as store from './store.js';
-import * as devices from './devices.js';
+import * as auth from './auth.js';
 import { sendSessionLink, mailerMode } from './mailer.js';
 import { renderLanding } from './landing.js';
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.disable('x-powered-by');
 
-// 원격 접속 도구이므로 운영자 API는 항상 토큰으로 보호한다.
+// 원격 접속 도구이므로 운영자 API 는 항상 토큰으로 보호한다.
 function requireAdmin(req, res, next) {
   const token = req.get('x-admin-token') || req.query.admin_token;
   if (token !== config.adminToken) return res.status(401).json({ error: '인증이 필요합니다' });
   next();
 }
 
-app.get('/healthz', (_req, res) => res.json({ ok: true, mailer: mailerMode() }));
+/** 링크 토큰으로 세션을 찾고, 쓸 수 없는 상태면 응답을 끝낸다. */
+function usableSession(req, res) {
+  const session = store.getByToken(req.params.token);
+  if (!session || !store.isUsable(session)) {
+    res.status(410).json({ error: '만료되었거나 사용할 수 없는 링크입니다' });
+    return null;
+  }
+  return session;
+}
+
+app.get('/healthz', (_req, res) =>
+  res.json({ ok: true, mailer: mailerMode(), auth: auth.authMode() }));
 
 // ---------- 운영자(지원자) API ----------
 
@@ -27,9 +39,7 @@ app.post('/api/sessions', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: '올바른 이메일이 필요합니다' });
   }
 
-  // 등록된 사내 PC 라면 접속 대상이 이미 정해져 있어 피지원자가 입력할 것이 없다.
-  const device = devices.findByUpn(email);
-  const session = store.createSession({ email, note: note || '', device });
+  const session = store.createSession({ email: email.toLowerCase(), note: note || '' });
   const link = `${config.baseUrl}/s/${session.token}`;
 
   try {
@@ -61,72 +71,160 @@ app.post('/api/sessions/:id/end', requireAdmin, (req, res) => {
   res.json(publicView(session));
 });
 
-// ---------- 피지원자용 (토큰으로만 접근) ----------
+// ---------- 회사 계정 로그인 ----------
+
+app.get('/auth/login/:token', async (req, res) => {
+  const session = store.getByToken(req.params.token);
+  if (!session || !store.isUsable(session)) {
+    return res.status(410).send(renderLanding({ state: 'expired' }));
+  }
+  if (!auth.entraConfigured) {
+    return res.send(renderLanding({ state: 'devlogin', session, token: req.params.token }));
+  }
+  try {
+    res.redirect(await auth.loginUrl(req.params.token));
+  } catch (err) {
+    console.error('로그인 주소 생성 실패:', err.message);
+    res.status(500).send(renderLanding({ state: 'autherror' }));
+  }
+});
+
+app.get('/auth/callback', async (req, res) => {
+  const token = String(req.query.state || '');
+  const session = store.getByToken(token);
+  if (!session || !store.isUsable(session)) {
+    return res.status(410).send(renderLanding({ state: 'expired' }));
+  }
+  if (req.query.error || !req.query.code) {
+    return res.status(400).send(renderLanding({ state: 'autherror' }));
+  }
+  try {
+    const user = await auth.exchangeCode(String(req.query.code));
+    applyLogin(session, user);
+    res.redirect(`/s/${token}`);
+  } catch (err) {
+    console.error('로그인 처리 실패:', err.message);
+    res.status(400).send(renderLanding({ state: 'autherror' }));
+  }
+});
+
+// Entra 미설정 환경에서 흐름을 검증하기 위한 개발용 로그인.
+app.post('/auth/dev/:token', (req, res) => {
+  if (auth.entraConfigured) return res.status(404).send('사용할 수 없습니다');
+  const session = store.getByToken(req.params.token);
+  if (!session || !store.isUsable(session)) {
+    return res.status(410).send(renderLanding({ state: 'expired' }));
+  }
+  const upn = String(req.body?.upn || '').toLowerCase().trim();
+  if (!upn) return res.redirect(`/auth/login/${req.params.token}`);
+  // 실제 Entra 와 같은 판정을 쓰도록 게스트 여부도 UPN 형태로 가린다.
+  applyLogin(session, { upn, name: '', tenantId: 'dev', isGuest: /#ext#/i.test(upn) });
+  res.redirect(`/s/${req.params.token}`);
+});
+
+/** 로그인 결과를 세션에 기록한다. 초대 대상과 다른 계정이면 인증되지 않은 것으로 둔다. */
+function applyLogin(session, user) {
+  const ok = auth.matchesInvitee(user.upn, session.email);
+  store.update(session, {
+    authedUpn: auth.normalizeUpn(user.upn),
+    authedName: auth.displayName(user),
+    authMatched: ok,
+    isGuest: Boolean(user.isGuest),
+    authAt: Date.now(),
+    status: ok && session.status === 'created' ? 'authed' : session.status,
+  });
+  if (!ok) console.warn(`계정 불일치: 초대=${session.email} 로그인=${user.upn}`);
+}
+
+// ---------- 피지원자 화면 ----------
 
 app.get('/s/:token', (req, res) => {
-  const session = store.getByToken(req.params.token);
+  const token = req.params.token;
+  const session = store.getByToken(token);
   if (!session) return res.status(404).send(renderLanding({ state: 'invalid' }));
   if (!store.isUsable(session)) return res.status(410).send(renderLanding({ state: 'expired' }));
-  res.send(renderLanding({ state: 'consent', session, token: req.params.token }));
+
+  // 1) 아직 로그인하지 않았다면 회사 계정 확인부터
+  if (!session.authedUpn) return res.send(renderLanding({ state: 'login', session, token }));
+
+  // 2) 로그인은 했지만 초대받은 계정이 아니라면 여기서 막는다
+  if (!auth.matchesInvitee(session.authedUpn, session.email)) {
+    return res.status(403).send(renderLanding({ state: 'mismatch', session, token }));
+  }
+
+  // 3) 동의 → 4) 연결 준비
+  const state = session.status === 'created' || session.status === 'authed' ? 'consent'
+    : session.status === 'ready' ? 'ready' : 'waiting';
+  res.send(renderLanding({ state, session, token }));
 });
 
-// 피지원자가 연결에 동의한 시점을 기록한다.
+// 안내 페이지가 연결 준비 여부를 확인하는 데 쓴다. 상태 값만 돌려준다.
+app.get('/api/s/:token/status', (req, res) => {
+  const session = usableSession(req, res);
+  if (!session) return;
+  res.json({ status: session.status });
+});
+
+// 동의. 이 시점부터 접속 정보를 받을 수 있다.
 app.post('/api/s/:token/accept', (req, res) => {
-  const session = store.getByToken(req.params.token);
-  if (!session || !store.isUsable(session)) return res.status(410).json({ error: '만료된 링크입니다' });
-  const now = Date.now();
-  if (session.status === 'created') {
-    store.update(session, { status: 'opened', openedAt: now });
+  const session = usableSession(req, res);
+  if (!session) return;
+  if (!isAuthed(session)) return res.status(403).json({ error: '회사 계정 확인이 필요합니다' });
+
+  if (['created', 'authed'].includes(session.status)) {
+    store.update(session, { status: 'opened', openedAt: Date.now() });
   }
-  // 관리 기기는 접속 정보를 이미 알고 있으므로 동의 즉시 연결 가능 상태가 된다.
-  if (session.managed && session.status === 'opened') {
-    store.update(session, { status: 'ready', readyAt: now });
-  }
-  res.json({ ok: true, status: session.status, managed: session.managed });
+  res.json({ ok: true, status: session.status });
 });
 
-// 피지원자 측 접속 정보 보고.
-// 커스텀 에이전트가 자동 호출하는 것이 목표이며, 현재는 안내 페이지의 수동 입력이 이 API를 사용한다.
+// 사내 PC 에 상주하는 핸들러가 자기 접속 정보를 알린다.
+// 사전 등록 없이, 사용자가 링크를 연 바로 그 PC 가 대상이 된다.
+app.post('/api/s/:token/agent', (req, res) => {
+  const session = usableSession(req, res);
+  if (!session) return;
+  if (!isAuthed(session)) return res.status(403).json({ error: '회사 계정 확인이 필요합니다' });
+  if (session.status === 'created' || session.status === 'authed') {
+    return res.status(409).json({ error: '아직 동의하지 않은 세션입니다' });
+  }
+
+  const rustdeskId = String(req.body?.rustdeskId || '').replace(/\s/g, '');
+  if (!/^\d{6,16}$/.test(rustdeskId)) {
+    return res.status(400).json({ error: 'ID 형식이 올바르지 않습니다' });
+  }
+  store.update(session, {
+    status: 'ready',
+    readyAt: Date.now(),
+    rustdeskId,
+    deviceHostname: String(req.body?.hostname || '').slice(0, 64) || null,
+    reportedBy: 'agent',
+  });
+  res.json({ ok: true });
+});
+
+// 핸들러가 없는 기기(주로 외부 게스트)를 위한 직접 입력 경로.
 app.post('/api/s/:token/ready', (req, res) => {
-  const session = store.getByToken(req.params.token);
-  if (!session || !store.isUsable(session)) return res.status(410).json({ error: '만료된 링크입니다' });
+  const session = usableSession(req, res);
+  if (!session) return;
+  if (!isAuthed(session)) return res.status(403).json({ error: '회사 계정 확인이 필요합니다' });
 
   const rustdeskId = String(req.body?.rustdeskId || '').replace(/\s/g, '');
   const password = String(req.body?.password || '').trim();
-  if (!/^\d{6,16}$/.test(rustdeskId)) return res.status(400).json({ error: 'ID 형식이 올바르지 않습니다' });
-
+  if (!/^\d{6,16}$/.test(rustdeskId)) {
+    return res.status(400).json({ error: 'ID 형식이 올바르지 않습니다' });
+  }
   store.update(session, {
     status: 'ready',
     readyAt: Date.now(),
     rustdeskId,
     connectPassword: password || null,
+    reportedBy: 'manual',
   });
   res.json({ ok: true });
 });
 
-// ---------- 기기 등록 (Intune 배포 스크립트가 호출) ----------
-
-app.post('/api/devices/enroll', (req, res) => {
-  if (!devices.verifyEnrollSecret(req.get('x-enroll-secret'))) {
-    return res.status(401).json({ error: '등록 인증에 실패했습니다' });
-  }
-  const { hostname, upn, rustdeskId } = req.body || {};
-  if (!hostname || !/^\d{6,16}$/.test(String(rustdeskId || ''))) {
-    return res.status(400).json({ error: 'hostname 과 rustdeskId 가 필요합니다' });
-  }
-  const device = devices.enroll({ hostname, upn, rustdeskId });
-  console.log(`기기 등록: ${device.hostname} (${device.upn || 'UPN 없음'}) -> ${device.rustdeskId}`);
-  res.status(201).json(device);
-});
-
-app.get('/api/devices', requireAdmin, (_req, res) => res.json(devices.list()));
-
-app.delete('/api/devices/:hostname', requireAdmin, (req, res) => {
-  if (!devices.remove(req.params.hostname)) {
-    return res.status(404).json({ error: '등록되지 않은 기기입니다' });
-  }
-  res.json({ ok: true });
-});
+function isAuthed(session) {
+  return Boolean(session.authedUpn) && auth.matchesInvitee(session.authedUpn, session.email);
+}
 
 app.use(express.static(join(process.cwd(), 'server', 'public')));
 
@@ -137,9 +235,13 @@ function publicView(session) {
 }
 
 const server = app.listen(config.port, () => {
-  console.log(`원격지원 세션 서버 → ${config.baseUrl} (메일: ${mailerMode()})`);
+  console.log(`원격지원 세션 서버 → ${config.baseUrl}`);
+  console.log(`  메일: ${mailerMode()} / 로그인: ${auth.authMode()}`);
   if (config.adminToken === 'dev-admin-token') {
-    console.warn('경고: ADMIN_TOKEN이 기본값입니다. 배포 전에 반드시 변경하세요.');
+    console.warn('경고: ADMIN_TOKEN 이 기본값입니다. 배포 전에 반드시 변경하세요.');
+  }
+  if (!auth.entraConfigured) {
+    console.warn('경고: Entra 설정이 없어 개발용 로그인이 활성화되어 있습니다.');
   }
 });
 
