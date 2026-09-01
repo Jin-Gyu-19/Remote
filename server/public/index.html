@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>원격지원 대시보드</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family:'Malgun Gothic',-apple-system,sans-serif; margin:0; background:#f4f6fa;
+         color:#111; padding:24px; }
+  .wrap { max-width:940px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:#6b7280; font-size:14px; margin:0 0 22px; }
+  .panel { background:#fff; border-radius:12px; padding:20px; margin-bottom:20px;
+           box-shadow:0 2px 12px rgba(0,0,0,.06); }
+  label { display:block; font-size:13px; font-weight:bold; margin:0 0 6px; color:#374151; }
+  input { width:100%; padding:11px; border:1px solid #d1d5db; border-radius:8px; font-size:15px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:200px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:11px 20px;
+           font-size:15px; font-weight:bold; cursor:pointer; }
+  button.ghost { background:#e5e7eb; color:#374151; padding:7px 14px; font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid #eef0f4; vertical-align:middle; }
+  th { font-size:12px; color:#6b7280; text-transform:uppercase; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:bold; }
+  .b-created { background:#e0e7ff; color:#3730a3; }
+  .b-opened  { background:#fef3c7; color:#92400e; }
+  .b-ready   { background:#d1fae5; color:#065f46; }
+  .b-ended, .b-expired { background:#e5e7eb; color:#6b7280; }
+  .msg { padding:12px; border-radius:8px; margin-bottom:14px; font-size:14px; display:none; }
+  .msg.show { display:block; }
+  .msg.ok { background:#d1fae5; color:#065f46; } .msg.bad { background:#fee2e2; color:#991b1b; }
+  code { background:#f3f4f6; padding:2px 7px; border-radius:5px; font-size:13px; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#0f172a; color:#e5e7eb; } .panel { background:#1e293b; box-shadow:none; }
+    input { background:#0f172a; color:#e5e7eb; border-color:#334155; }
+    th,td { border-color:#334155; } code { background:#0f172a; }
+  }
+</style></head><body><div class="wrap">
+  <h1>원격지원 대시보드</h1>
+  <p class="sub">이메일로 링크를 보내면 상대방은 코드 입력 없이 연결됩니다.</p>
+
+  <div class="panel" id="auth-panel">
+    <label for="admin">관리자 토큰</label>
+    <div class="row">
+      <div><input id="admin" type="password" placeholder="ADMIN_TOKEN"></div>
+      <button onclick="saveToken()">저장</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="msg" id="msg"></div>
+    <div class="row">
+      <div>
+        <label for="email">상대방 이메일</label>
+        <input id="email" type="email" placeholder="user@company.com">
+      </div>
+      <div>
+        <label for="note">요청 내용 (선택)</label>
+        <input id="note" placeholder="예: 프린터 연결 오류">
+      </div>
+      <div style="flex:0 0 auto; display:flex; align-items:flex-end">
+        <button onclick="createSession()">링크 발송</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead><tr><th>대상</th><th>내용</th><th>상태</th><th>접속 정보</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" style="color:#9ca3af">불러오는 중...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const LABEL = { created:'발송됨', opened:'열람함', ready:'연결 준비', ended:'종료', expired:'만료' };
+  let token = localStorage.getItem('adminToken') || '';
+  document.getElementById('admin').value = token;
+
+  function saveToken() {
+    token = document.getElementById('admin').value.trim();
+    localStorage.setItem('adminToken', token);
+    flash('토큰을 저장했습니다', true); refresh();
+  }
+  function flash(text, ok) {
+    const m = document.getElementById('msg');
+    m.textContent = text; m.className = 'msg show ' + (ok ? 'ok' : 'bad');
+    setTimeout(() => m.className = 'msg', 4000);
+  }
+  const api = (path, opts = {}) => fetch(path, {
+    ...opts, headers: { 'content-type':'application/json', 'x-admin-token': token, ...(opts.headers||{}) },
+  });
+
+  async function createSession() {
+    const email = document.getElementById('email').value.trim();
+    const note = document.getElementById('note').value.trim();
+    const res = await api('/api/sessions', { method:'POST', body: JSON.stringify({ email, note }) });
+    const data = await res.json();
+    if (!res.ok && res.status !== 207) return flash(data.error || '발송 실패', false);
+    if (res.status === 207) flash('링크는 생성됐지만 메일 발송에 실패했습니다: ' + data.mailError, false);
+    else flash(email + ' 으로 링크를 보냈습니다', true);
+    document.getElementById('email').value = ''; document.getElementById('note').value = '';
+    refresh();
+  }
+
+  async function endSession(id) {
+    await api('/api/sessions/' + id + '/end', { method:'POST' });
+    refresh();
+  }
+
+  // RustDesk 클라이언트를 해당 ID로 바로 띄운다.
+  function connect(id, pw) {
+    if (pw) navigator.clipboard?.writeText(pw).then(
+      () => flash('비밀번호를 클립보드에 복사했습니다', true), () => {});
+    location.href = 'rustdesk://connection/new/' + id;
+  }
+
+  async function refresh() {
+    if (!token) return;
+    const res = await api('/api/sessions');
+    const tbody = document.getElementById('rows');
+    if (!res.ok) { tbody.innerHTML = '<tr><td colspan="5">토큰을 확인하세요</td></tr>'; return; }
+    const list = await res.json();
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:#9ca3af">아직 세션이 없습니다</td></tr>'; return; }
+
+    tbody.innerHTML = list.map(s => {
+      const info = s.status === 'ready'
+        ? '<code>' + s.rustdeskId + '</code> / <code>' + (s.connectPassword || '') + '</code>'
+        : '<span style="color:#9ca3af">대기 중</span>';
+      const action = s.status === 'ready'
+        ? '<button class="ghost" onclick="connect(\'' + s.rustdeskId + '\',\'' + (s.connectPassword||'') + '\')">연결</button> ' +
+          '<button class="ghost" onclick="endSession(\'' + s.id + '\')">종료</button>'
+        : (['ended','expired'].includes(s.status) ? '' :
+           '<button class="ghost" onclick="endSession(\'' + s.id + '\')">취소</button>');
+      return '<tr><td>' + s.email + '</td><td>' + (s.note || '-') + '</td>' +
+             '<td><span class="badge b-' + s.status + '">' + (LABEL[s.status]||s.status) + '</span></td>' +
+             '<td>' + info + '</td><td>' + action + '</td></tr>';
+    }).join('');
+  }
+
+  refresh();
+  setInterval(refresh, 3000);
+</script></body></html>

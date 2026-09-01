@@ -1,0 +1,28 @@
+# 자체 호스팅 RustDesk 서버 (hbbs: ID/시그널링, hbbr: 릴레이)
+# 사용법: RELAY_HOST 를 이 서버의 공인 IP 또는 도메인으로 지정한 뒤 `docker compose up -d`
+services:
+  hbbs:
+    container_name: rustdesk-hbbs
+    image: rustdesk/rustdesk-server:latest
+    command: hbbs -r ${RELAY_HOST}:21117
+    volumes:
+      - ./data:/root
+    ports:
+      - "21115:21115"      # NAT 타입 테스트
+      - "21116:21116"      # ID 등록/시그널링 (TCP)
+      - "21116:21116/udp"  # ID 등록/시그널링 (UDP) - 필수
+      - "21118:21118"      # 웹소켓 클라이언트
+    depends_on:
+      - hbbr
+    restart: unless-stopped
+
+  hbbr:
+    container_name: rustdesk-hbbr
+    image: rustdesk/rustdesk-server:latest
+    command: hbbr
+    volumes:
+      - ./data:/root
+    ports:
+      - "21117:21117"      # 릴레이
+      - "21119:21119"      # 웹소켓 릴레이
+    restart: unless-stopped
