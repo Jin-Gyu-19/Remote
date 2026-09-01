@@ -31,6 +31,7 @@
   .msg.show { display:block; }
   .msg.ok { background:#d1fae5; color:#065f46; } .msg.bad { background:#fee2e2; color:#991b1b; }
   code { background:#f3f4f6; padding:2px 7px; border-radius:5px; font-size:13px; }
+  [hidden] { display:none !important; }
   @media (prefers-color-scheme: dark) {
     body { background:#0f172a; color:#e5e7eb; } .panel { background:#1e293b; box-shadow:none; }
     input { background:#0f172a; color:#e5e7eb; border-color:#334155; }
@@ -41,10 +42,16 @@
   <p class="sub">이메일로 링크를 보내면 상대방은 코드 입력 없이 연결됩니다.</p>
 
   <div class="panel" id="auth-panel">
-    <label for="admin">관리자 토큰</label>
-    <div class="row">
-      <div><input id="admin" type="password" placeholder="ADMIN_TOKEN"></div>
-      <button onclick="saveToken()">저장</button>
+    <div id="auth-done" hidden style="display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:14px">관리자로 인증되었습니다</span>
+      <button class="ghost" onclick="expandAuth()">토큰 변경</button>
+    </div>
+    <div id="auth-form">
+      <label for="admin">관리자 토큰</label>
+      <div class="row">
+        <div><input id="admin" type="password" placeholder="ADMIN_TOKEN"></div>
+        <button onclick="saveToken()">저장</button>
+      </div>
     </div>
   </div>
 
@@ -86,10 +93,18 @@
   let token = localStorage.getItem('adminToken') || '';
   document.getElementById('admin').value = token;
 
+  // 인증이 끝나면 토큰 칸은 접어두고 목록에 자리를 내준다.
+  function collapseAuth(done) {
+    document.getElementById('auth-done').hidden = !done;
+    document.getElementById('auth-form').hidden = done;
+  }
+  function expandAuth() { collapseAuth(false); }
+
   function saveToken() {
     token = document.getElementById('admin').value.trim();
     localStorage.setItem('adminToken', token);
-    flash('토큰을 저장했습니다', true); refresh();
+    collapseAuth(Boolean(token));
+    flash('토큰을 저장했습니다', true); refresh(); refreshDevices();
   }
   function flash(text, ok) {
     const m = document.getElementById('msg');
@@ -129,15 +144,22 @@
     if (!token) return;
     const res = await api('/api/sessions');
     const tbody = document.getElementById('rows');
-    if (!res.ok) { tbody.innerHTML = '<tr><td colspan="5">토큰을 확인하세요</td></tr>'; return; }
+    if (!res.ok) {
+      tbody.innerHTML = '<tr><td colspan="5">토큰을 확인하세요</td></tr>';
+      collapseAuth(false);
+      return;
+    }
     const list = await res.json();
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:#9ca3af">아직 세션이 없습니다</td></tr>'; return; }
 
     tbody.innerHTML = list.map(s => {
-      const info = s.rustdeskId
+      // 상대가 동의하기 전에는 접속 정보를 띄우지 않는다.
+      // 관리 기기는 발송 시점에 이미 ID를 알지만, 아직 연결할 수 있는 상태가 아니다.
+      const info = s.status === 'ready'
         ? '<code>' + s.rustdeskId + '</code>' +
           (s.connectPassword ? ' / <code>' + s.connectPassword + '</code>' : '')
-        : '<span style="color:#9ca3af">대기 중</span>';
+        : '<span style="color:#9ca3af">' +
+          (s.status === 'created' ? '동의 대기 중' : '대기 중') + '</span>';
       const who = s.email + (s.deviceHostname
         ? '<br><span style="font-size:12px;color:#6b7280">🖥 ' + s.deviceHostname + '</span>'
         : '<br><span style="font-size:12px;color:#b45309">미등록 기기</span>');
@@ -164,6 +186,7 @@
       : '<tr><td style="color:#9ca3af">아직 등록된 기기가 없습니다 (Intune 배포 후 자동 등록)</td></tr>';
   }
 
+  collapseAuth(Boolean(token));
   refresh(); refreshDevices();
   setInterval(refresh, 3000);
   setInterval(refreshDevices, 30000);
