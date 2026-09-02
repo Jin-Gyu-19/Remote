@@ -187,6 +187,17 @@ app.post('/api/s/:token/agent', (req, res) => {
     return res.status(409).json({ error: '아직 동의하지 않은 세션입니다' });
   }
 
+  // 보고하는 PC 에 로그인한 Windows 계정이 이 세션을 인증한 계정과 같아야 한다.
+  // 다른 사람의 세션 토큰을 이 PC 에서 열게 만들어 접속 정보를 가로채는 시도를 막는다.
+  const reportedUpn = auth.normalizeUpn(req.body?.upn);
+  if (!reportedUpn) {
+    return res.status(403).json({ error: 'PC 의 로그인 계정을 확인할 수 없습니다' });
+  }
+  if (reportedUpn !== session.authedUpn) {
+    console.warn(`계정 불일치 보고 차단: 세션=${session.authedUpn} PC=${reportedUpn}`);
+    return res.status(403).json({ error: '이 PC 의 로그인 계정이 세션과 다릅니다' });
+  }
+
   const rustdeskId = String(req.body?.rustdeskId || '').replace(/\s/g, '');
   if (!/^\d{6,16}$/.test(rustdeskId)) {
     return res.status(400).json({ error: 'ID 형식이 올바르지 않습니다' });

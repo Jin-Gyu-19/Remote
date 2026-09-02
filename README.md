@@ -22,6 +22,7 @@
 | 회사 계정 로그인 | Entra ID 로 링크 수신자 본인 확인 | `server/src/auth.js` |
 | 지원자 대시보드 | 링크 발송 및 접속 | `server/public/index.html` |
 | 피지원자 안내 페이지 | 로그인 → 동의 → 연결 | `server/src/landing.js` |
+| SupportLink 핸들러 | 사내 PC 가 자기 접속 정보를 알림 | `agent/` |
 | RustDesk 서버 (hbbs/hbbr) | ID 등록·시그널링·릴레이 | `deploy/docker-compose.yml` |
 
 ## 연결 흐름
@@ -91,17 +92,17 @@ RustDesk 서버는 가벼워서 무료 티어로 충분하다. **Oracle Cloud Al
 
 - RustDesk 클라이언트 + 자체 서버 주소·Key 내장
 - **승인 방식을 '수락 클릭'으로 고정** (`approve-mode=click`)
-- `supportlink://` 프로토콜 핸들러 — 링크 클릭 시 실행되어 아래 API 를 호출한다
+- `supportlink://` 프로토콜 핸들러 — `agent/` 참고
 - Defender 예외, 서비스 모드 설치
 
 핸들러가 호출하는 API:
 
 ```
 POST /api/s/<링크토큰>/agent
-{ "rustdeskId": "482913756", "hostname": "BDO-NB-0417" }
+{ "rustdeskId": "482913756", "hostname": "BDO-NB-0417", "upn": "kim@company.com" }
 ```
 
-세션 토큰이 곧 인가 수단이며, **로그인과 동의를 마친 세션에서만** 접수된다.
+**로그인과 동의를 마친 세션**이고, 보고한 PC 의 로그인 계정이 **세션을 인증한 계정과 같을 때만** 접수된다.
 
 ## 보안
 
@@ -111,6 +112,7 @@ POST /api/s/<링크토큰>/agent
 - 링크는 기본 15분 후 만료되고, 종료된 세션은 재사용할 수 없다
 - **회사 계정 로그인을 통과해야만** 동의·접속 정보 전달이 가능하다
 - 초대 대상과 다른 계정으로 로그인하면 차단되고, 대시보드에 경고로 표시된다
+- 핸들러 보고는 **PC 의 로그인 계정이 세션 인증 계정과 같을 때만** 접수한다 (세션 가로채기 방지)
 - 접속 전 피지원자의 **명시적 동의 화면**을 반드시 거친다
 - 사내 경로는 접속 비밀번호를 사용하지 않는다 — 서버가 보관하는 비밀번호가 없다
 - 운영 API 는 `ADMIN_TOKEN` 으로 보호된다 — 배포 전 반드시 변경할 것
@@ -123,7 +125,8 @@ POST /api/s/<링크토큰>/agent
 - [x] 수락 방식 연결 (접속 비밀번호 제거)
 - [x] Entra ID 로그인으로 본인 확인 · 게스트 초대 지원
 - [x] 기기 사전 등록 제거 — 링크를 연 PC 가 스스로 보고
-- [ ] `supportlink://` 핸들러 구현 및 Intune 배포 패키지
+- [x] `supportlink://` 핸들러 (PowerShell) + 설치/진단 스크립트
+- [ ] 핸들러 실기 검증 (Windows PC 에서 `agent/Test-SupportLink.ps1`)
 - [ ] **딥링크 검증** — 공식 클라이언트의 `rustdesk://` 동작 범위 확인 (`docs/deeplink-test.md`)
 - [ ] 대시보드 로그인도 Entra SSO 로 전환 (현재는 ADMIN_TOKEN)
 - [ ] 세션 로그 및 감사 기록
