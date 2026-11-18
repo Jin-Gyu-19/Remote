@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   supportlink:// 핸들러를 설치하고 Windows 에 등록한다.
 
@@ -31,6 +31,14 @@ if (-not $isAdmin) {
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $src = Join-Path $PSScriptRoot 'SupportLinkHandler.ps1'
 if (-not (Test-Path $src)) { throw "SupportLinkHandler.ps1 를 같은 폴더에서 찾을 수 없습니다" }
+
+# BOM 이 없으면 PowerShell 5.1 이 한글 문자열을 ANSI 로 잘못 읽어 구문 오류로 죽는다.
+# 그 경우 핸들러는 로그조차 남기지 못하므로, 등록 전에 여기서 막는다.
+$bytes = [IO.File]::ReadAllBytes($src)
+if (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) {
+  throw "SupportLinkHandler.ps1 에 UTF-8 BOM 이 없습니다. BOM 없이 저장하면 PowerShell 5.1 에서 구문 오류로 죽습니다: $src"
+}
+
 Copy-Item $src (Join-Path $InstallDir 'SupportLinkHandler.ps1') -Force
 @{ serverBase = $ServerBase.TrimEnd('/') } | ConvertTo-Json |
   Set-Content (Join-Path $InstallDir 'config.json') -Encoding UTF8

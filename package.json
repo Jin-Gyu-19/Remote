@@ -5,11 +5,11 @@
   "type": "module",
   "description": "이메일 링크 원클릭 원격지원 - RustDesk 기반 세션 발급 서버",
   "scripts": {
-    "start": "node server/src/index.js",
-    "dev": "node --watch server/src/index.js"
+    "start": "node --env-file-if-exists=.env server/src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env server/src/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18"
   },
   "dependencies": {
     "@azure/msal-node": "^6.0.0",

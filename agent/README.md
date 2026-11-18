@@ -41,6 +41,7 @@
 | `Install-SupportLink.ps1` | 파일 배치 + 프로토콜 등록 |
 | `Uninstall-SupportLink.ps1` | 제거 |
 | `Test-SupportLink.ps1` | 이 PC 에서 동작 조건 점검 (서버에 아무것도 보내지 않음) |
+| `Set-RustDeskConfig.ps1` | RustDesk 를 자체 서버에 붙이고 승인 방식을 '수락 클릭' 으로 고정 |
 
 PowerShell 5.1(Windows 기본 내장)로 동작하며 별도 설치가 필요 없다.
 

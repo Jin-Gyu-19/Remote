@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   supportlink:// 링크가 눌렸을 때 Windows 가 실행하는 핸들러.
 
@@ -9,6 +9,8 @@
   링크에 담긴 어떤 값도 접속 주소로 쓰지 않는다.
 
   PowerShell 5.1 (Windows 기본 내장) 에서 동작한다.
+  주의: 이 파일은 UTF-8 BOM 으로 저장해야 한다. BOM 이 없으면 PowerShell 5.1 이
+  한글 문자열을 ANSI(CP949) 로 잘못 읽어 구문 오류로 즉시 죽는다(로그도 남지 않는다).
 #>
 param([Parameter(Mandatory = $true)][string]$Url)
 
@@ -23,6 +25,26 @@ function Write-Log([string]$Message) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
     Add-Content -Path $LogFile -Value $line -Encoding UTF8
   } catch { }
+}
+
+# rustdesk.exe 위치. 기본 설치 경로 → 사용자 단위 설치 경로 → 레지스트리 InstallLocation 순.
+function Get-RustDeskExe {
+  $cands = New-Object System.Collections.Generic.List[string]
+  $cands.Add((Join-Path $env:ProgramFiles 'RustDesk\rustdesk.exe'))
+  if (${env:ProgramFiles(x86)}) { $cands.Add((Join-Path ${env:ProgramFiles(x86)} 'RustDesk\rustdesk.exe')) }
+  $cands.Add((Join-Path $env:LOCALAPPDATA 'Programs\RustDesk\rustdesk.exe'))
+  $cands.Add((Join-Path $env:LOCALAPPDATA 'RustDesk\rustdesk.exe'))
+  try {
+    $keys = @(
+      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+      'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like '*RustDesk*' -and $_.InstallLocation } |
+      ForEach-Object { $cands.Add((Join-Path $_.InstallLocation 'rustdesk.exe')) }
+  } catch { }
+  $cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 
 # ── 1. 설정: 서버 주소는 설치 시 고정된 값만 신뢰한다 ──
@@ -43,10 +65,8 @@ $token = $Matches[1]
 #          암호화된 enc_id 만 있을 수 있어 CLI 가 가장 확실하다.
 #   2순위: 설정 파일의 id 값 (구버전 호환)
 $rustdeskId = $null
-$exe = @(
-  (Join-Path $env:ProgramFiles 'RustDesk\rustdesk.exe'),
-  (Join-Path ${env:ProgramFiles(x86)} 'RustDesk\rustdesk.exe')
-) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+$exe = Get-RustDeskExe
+if (-not $exe) { Write-Log 'rustdesk.exe 를 찾지 못함' }
 
 if ($exe) {
   $tmp = [IO.Path]::GetTempFileName()
@@ -55,8 +75,12 @@ if ($exe) {
               -WindowStyle Hidden -PassThru
     if ($proc.WaitForExit(5000)) {
       $out = ([string](Get-Content $tmp -Raw -ErrorAction SilentlyContinue)).Trim()
-      if ($out -match '^\d{6,16}$') { $rustdeskId = $out }
-      else { Write-Log "--get-id 출력이 ID 형식이 아님: '$out'" }
+      # 설치되지 않은(부트스트랩) exe 는 'skip ...' / 'executing ...' 같은 줄을 먼저 찍고
+      # ID 를 마지막 줄에 낸다. 전체 문자열로 비교하면 실패하므로 숫자만인 줄을 골라낸다.
+      $cand = $out -split "`r?`n" | ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -match '^\d{6,16}$' } | Select-Object -Last 1
+      if ($cand) { $rustdeskId = $cand }
+      else { Write-Log "--get-id 출력에서 ID 를 찾지 못함: '$out'" }
     } else {
       try { $proc.Kill() } catch { }
       Write-Log '--get-id 응답 없음 (5초 초과)'
@@ -75,6 +99,9 @@ if (-not $rustdeskId) {
     try {
       $toml = Get-Content $p -Raw -Encoding UTF8
       if ($toml -match "(?m)^\s*id\s*=\s*'(\d{6,16})'") { $rustdeskId = $Matches[1]; break }
+      elseif ($toml -match "(?m)^\s*enc_id\s*=") {
+        Write-Log "설정 파일에 평문 id 가 없고 enc_id 만 있음 ($p) - CLI(--get-id) 로만 읽을 수 있음"
+      }
     } catch { Write-Log "설정 읽기 실패 ($p): $($_.Exception.Message)" }
   }
 }

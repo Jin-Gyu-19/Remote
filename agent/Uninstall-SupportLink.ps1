@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   supportlink:// 핸들러 등록과 파일을 제거한다.
 #>
